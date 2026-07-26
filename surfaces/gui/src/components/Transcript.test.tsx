@@ -58,6 +58,61 @@ describe("TurnGroup (Transcript §33)", () => {
     expect(screen.getByTestId("step-running")).toBeTruthy();
   });
 
+  // Live progress from a long-running call (a delegated coding task). The collapsed header
+  // is what the user watches for minutes, so the newest line has to reach it.
+  const DELEGATION: Item[] = [
+    { kind: "assistant", text: "Handing the parser work to Claude Code." },
+    {
+      kind: "tool",
+      id: "t1",
+      name: "delegate_coding_task",
+      args: { task: "add a --verbose flag" },
+      status: "…",
+      progress: [
+        { kind: "narration", text: "Reading the CLI module." },
+        { kind: "tool", tool: "Edit", target: "src/cli.py" },
+      ],
+    },
+  ];
+
+  it("streams the newest progress line onto the collapsed turn header", () => {
+    render(<Transcript items={DELEGATION} onApprove={vi.fn()} />);
+    // Newest line wins over the earlier assistant narration, which would otherwise sit
+    // stale in the header for the whole delegation.
+    expect(screen.getByTestId("turn-live-line").textContent).toContain("Edit · src/cli.py");
+    expect(screen.getByTestId("turn-live-line").textContent).not.toContain("Handing the parser");
+  });
+
+  it("lists the progress lines under the running step when expanded", () => {
+    const { container } = render(<Transcript items={DELEGATION} onApprove={vi.fn()} />);
+    expect(screen.queryByTestId("tool-progress")).toBeNull(); // collapsed by default
+    fireEvent.click(container.querySelector("summary.stepgroup-head")!);
+    const progress = screen.getByTestId("tool-progress");
+    expect(progress.textContent).toContain("Reading the CLI module.");
+    expect(progress.textContent).toContain("Edit · src/cli.py");
+  });
+
+  it("drops progress once the call finishes, so live and replayed turns match", () => {
+    // Progress is display-only and never persisted, so a reloaded transcript has none —
+    // keeping it after completion would make the two views disagree.
+    const finished: Item[] = [
+      { ...(DELEGATION[1] as any), status: "ok", preview: "{}" },
+    ];
+    const { container } = render(<Transcript items={finished} onApprove={vi.fn()} />);
+    fireEvent.click(container.querySelector("summary.stepgroup-head")!);
+    expect(screen.queryByTestId("tool-progress")).toBeNull();
+  });
+
+  it("renders a running delegation that has not reported anything yet", () => {
+    const items: Item[] = [
+      { kind: "tool", id: "t1", name: "delegate_coding_task", args: {}, status: "…" },
+    ];
+    const { container } = render(<Transcript items={items} onApprove={vi.fn()} />);
+    fireEvent.click(container.querySelector("summary.stepgroup-head")!);
+    expect(screen.queryByTestId("tool-progress")).toBeNull();
+    expect(screen.getByTestId("step-running")).toBeTruthy();
+  });
+
   it("declined approvals keep their own 'Wanted to' row and surface on the collapsed line", () => {
     const items: Item[] = [
       { kind: "tool", id: "t1", name: "read_file", args: { path: "a.md" }, status: "ok" },

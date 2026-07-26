@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ApprovalDecision, Item } from "../types";
+import type { ApprovalDecision, Item, ToolProgress } from "../types";
 import { shortArgs } from "./ApprovalCard";
 import { humanizeAsk, humanizeTool, type HumanLine } from "../humanize";
 import { Markdown } from "./Markdown";
@@ -155,6 +155,16 @@ function LineText({ line }: { line: HumanLine }) {
   );
 }
 
+// One live progress line as display text: the delegate's own narration verbatim, or its
+// tool call as "Edit · src/foo.py".
+function progressText(line: ToolProgress): string {
+  if (line.kind === "narration") return line.text || "";
+  return line.target ? `${line.tool} · ${line.target}` : String(line.tool || "");
+}
+
+// How many of the retained lines the expanded row shows — the tail is what's informative.
+const VISIBLE_PROGRESS = 6;
+
 function StepRow({ tool, approval }: { tool: ToolItem; approval?: ApprovalItem }) {
   const [raw, setRaw] = useState(false);
   const running = tool.status === "…";
@@ -195,6 +205,17 @@ function StepRow({ tool, approval }: { tool: ToolItem; approval?: ApprovalItem }
           </button>
         )}
       </div>
+      {/* Only while running: progress is never persisted, so hiding it on completion is
+          what makes a live turn and the same turn after a reload look the same. */}
+      {running && !!tool.progress?.length && (
+        <div className="ml-8 mr-2 my-0.5 flex flex-col gap-0.5" data-testid="tool-progress">
+          {tool.progress.slice(-VISIBLE_PROGRESS).map((line, i) => (
+            <span className="text-[11.5px] leading-relaxed text-faint truncate" key={i}>
+              {progressText(line)}
+            </span>
+          ))}
+        </div>
+      )}
       {raw && (
         <pre className="ml-8 mr-2 my-1 px-2.5 py-1.5 rounded-lg border border-line bg-paper font-mono text-[11.5px] leading-relaxed text-muted whitespace-pre-wrap break-words max-h-56 overflow-auto">
           {`${tool.name}  ${shortArgs(tool.args)}`}
@@ -224,7 +245,15 @@ function TurnGroup({
   const [userToggle, setUserToggle] = useState<boolean | null>(null);
   const open = userToggle ?? false;
   const lastNarr = [...items].reverse().find((it): it is AssistantItem => it.kind === "assistant");
-  const liveLine = streamingText || lastNarr?.text || "";
+  // Turns start collapsed, so this header line is all the user sees while work happens. A
+  // delegated task runs for minutes: prefer its newest progress line, or the last narration
+  // would sit stale in the header for that entire time and read as a hang.
+  const lastProgress = [...tools]
+    .reverse()
+    .find((t) => t.status === "…" && t.progress?.length)
+    ?.progress?.slice(-1)[0];
+  const liveLine =
+    streamingText || (lastProgress && progressText(lastProgress)) || lastNarr?.text || "";
 
   const nSteps = rows.filter((r) => r.type !== "narr").length;
   const declined = items.filter((it) => it.kind === "approval" && it.resolved === "deny").length;

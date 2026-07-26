@@ -21,6 +21,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from .events import Event, EventType
 from .permissions import Mode, PermissionEngine
+from .progress import bind_sink, reset_sink, wants_progress
 from .providers import AssistantTurn, ProviderClient, ToolCall
 from .providers.errors import friendly_model_error
 from .tools import ToolRegistry
@@ -498,8 +499,68 @@ class TurnEngine:
                 continue
             yield Event(EventType.TOOL_STARTED, {"name": tool_call.name})
             self._audit(tool_call, stage="started")
-            result, status = await asyncio.to_thread(self._execute_sync, tool_call)
+            spec = self.registry.get(tool_call.name)
+            if spec is not None and wants_progress(spec.func):
+                # Long-running by declaration (a delegated coding task): stream its
+                # progress instead of going quiet until it returns.
+                result, status = None, "error"
+                async for item in self._execute_streaming(tool_call):
+                    if isinstance(item, Event):
+                        yield item
+                    else:
+                        result, status = item
+            else:
+                result, status = await asyncio.to_thread(self._execute_sync, tool_call)
             yield self._record_result(tool_call, result, status)
+
+    async def _execute_streaming(self, tool_call: ToolCall) -> AsyncIterator[Any]:
+        """Execute a progress-reporting tool, yielding TOOL_PROGRESS events as they arrive
+        and the `(result, status)` tuple last (the `Event | value` shape `_authorize` uses).
+
+        Same thread+queue bridge as `_astream`: the call runs in a worker thread and
+        publishes through the contextvar sink `coworker.progress` binds, and
+        `call_soon_threadsafe` hands each item back to the loop so it can be yielded while
+        the call is still in flight.
+        """
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def emit(item: dict) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, item)
+
+        def execute() -> tuple[Any, str]:
+            # Set inside the thread: `to_thread` runs this in a *copy* of the context, so
+            # the binding can't leak into concurrently executing tools.
+            token = bind_sink(emit)
+            try:
+                return self._execute_sync(tool_call)
+            finally:
+                reset_sink(token)
+
+        task = asyncio.ensure_future(asyncio.to_thread(execute))
+        while True:
+            get_task = asyncio.ensure_future(queue.get())
+            done, _ = await asyncio.wait(
+                {get_task, task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if get_task in done:
+                yield Event(
+                    EventType.TOOL_PROGRESS,
+                    {"name": tool_call.name, **get_task.result()},
+                )
+                continue
+            get_task.cancel()
+            # The call returned. Let the loop run any `call_soon_threadsafe` callbacks
+            # queued just before it did, then flush them — otherwise the last few
+            # progress items are dropped on the floor.
+            await asyncio.sleep(0)
+            while not queue.empty():
+                yield Event(
+                    EventType.TOOL_PROGRESS,
+                    {"name": tool_call.name, **queue.get_nowait()},
+                )
+            yield await task
+            return
 
     def _interrupted_tool(self, tool_call: ToolCall) -> Event:
         """The stop-path answer for a call that will not run: a tool-error result in the
