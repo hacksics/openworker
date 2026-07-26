@@ -7,7 +7,7 @@ import {
   type ProviderInfo,
 } from "../api";
 import { openExternal } from "../tauri";
-import { PROVIDER_LOGOS, providerRank } from "./logos";
+import { FULL_BLEED_LOGOS, PROVIDER_LOGOS, providerRank } from "./logos";
 
 // The provider gallery ⇄ key form, shared by Onboarding step 1 (§39) and
 // Settings ▸ Models (UX-021) so the two can never drift apart visually. The hook
@@ -31,18 +31,42 @@ export const KEY_HELP: Record<string, { url: string; label: string }> = {
   xai: { url: "https://console.x.ai", label: "console.x.ai" },
 };
 
+// Keyless local runtimes: there's no key to fetch, so the equivalent help is "where do I get
+// the app, and what do I have to do in it". LM Studio needs the extra nudge — unlike `ollama
+// serve`, its server is off by default and lives behind a tab most users never open.
+export const LOCAL_HELP: Record<string, { url: string; label: string; note: string }> = {
+  ollama: {
+    url: "https://ollama.com/download",
+    label: "Install Ollama",
+    note: "No API key needed — Ollama runs models on this Mac.",
+  },
+  lmstudio: {
+    url: "https://lmstudio.ai/download",
+    label: "Install LM Studio",
+    // The "start the server" instruction lives in the endpoint field's own help text;
+    // repeating it here put the same sentence on screen twice.
+    note: "No API key needed — LM Studio runs models on this Mac.",
+  },
+};
+
 export type Verify = { state: "idle" | "testing" | "ok" | "error"; msg?: string };
 
 /** Brand chip: always a light plate so multicolor marks read on any theme. */
 export function ProviderMark({ name, title, size = 32 }: { name: string; title: string; size?: number }) {
   const url = PROVIDER_LOGOS[name];
+  const bleed = FULL_BLEED_LOGOS.has(name);
   return (
     <span
-      className="rounded-lg border border-line grid place-items-center shrink-0"
+      className="rounded-lg border border-line grid place-items-center shrink-0 overflow-hidden"
       style={{ width: size, height: size, background: "#f6f7f8" }}
     >
       {url ? (
-        <img src={url} alt="" style={{ width: size * 0.6, height: size * 0.6 }} />
+        <img
+          src={url}
+          alt=""
+          // A self-backgrounded app icon fills the plate; a flat glyph floats inside it.
+          style={bleed ? { width: "100%", height: "100%" } : { width: size * 0.6, height: size * 0.6 }}
+        />
       ) : (
         <span className="text-[13px] font-semibold text-muted">{title[0]}</span>
       )}
@@ -156,7 +180,12 @@ export function useProviderSetup(opts?: { onSaved?: () => void }): ProviderSetup
       setVerify({ state: "error", msg: res.error || "couldn't verify" });
       return false;
     }
-    if (dirty || !info?.configured) await setProvider(sel, fields).catch(() => {});
+    // Keyless providers always save. `configured` is true for them from the very first
+    // render (there is no key to be missing), so the guard below would skip the save for a
+    // user who accepted the default endpoint and typed nothing — leaving no stored profile,
+    // which is exactly what model discovery reads to decide the runtime was opted into.
+    if (dirty || !info?.configured || !info?.needs_key)
+      await setProvider(sel, fields).catch(() => {});
     if (!info?.needs_key) setKeylessOk((s) => new Set(s).add(sel));
     setVerify({ state: "ok" });
     setDirty(false);
@@ -406,14 +435,14 @@ export function ProviderForm({
           — takes about a minute.
         </p>
       )}
-      {info && !info.needs_key && (
+      {info && !info.needs_key && LOCAL_HELP[sel] && (
         <p className="text-[11.5px] text-faint mt-2">
-          No API key needed — Ollama runs models on this Mac.{" "}
+          {LOCAL_HELP[sel].note}{" "}
           <button
             className="text-muted underline decoration-line underline-offset-2 hover:text-ink"
-            onClick={() => openExternal("https://ollama.com/download")}
+            onClick={() => openExternal(LOCAL_HELP[sel].url)}
           >
-            Install Ollama ↗
+            {LOCAL_HELP[sel].label} ↗
           </button>
         </p>
       )}
