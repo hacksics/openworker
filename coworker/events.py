@@ -1,7 +1,12 @@
 """Event model — the contract between the turn engine and any surface (TUI/GUI/IDE).
 
-No token streaming in v1, so granularity is per-message/per-tool. Streaming later adds
-`assistant_delta` / `tool_output_delta` without changing the rest.
+Granularity is per-token for model output (`assistant_delta`, `reasoning_delta`) and
+per-tool otherwise: one `tool_started`/`tool_finished` pair per call. The exception is
+`tool_progress`, for tools that run long enough that silence would read as a hang — it
+carries display-only detail from inside a call that hasn't returned yet.
+
+Surfaces must tolerate unknown event types: adding one here is routine, and the server
+broadcasts every event generically rather than enumerating them.
 """
 
 from __future__ import annotations
@@ -26,6 +31,10 @@ class EventType(str, Enum):
         "plan_proposed"  # agent presents a plan for approval (plan mode exit)
     )
     TOOL_STARTED = "tool_started"
+    # Display-only progress from inside a still-running tool (see coworker.progress).
+    # Emitted only for tools that opt in; a minutes-long delegated task would otherwise
+    # look wedged between TOOL_STARTED and TOOL_FINISHED.
+    TOOL_PROGRESS = "tool_progress"
     TOOL_FINISHED = "tool_finished"
     ITERATION_END = "iteration_end"
     TURN_END = "turn_end"

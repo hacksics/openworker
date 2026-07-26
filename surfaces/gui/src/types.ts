@@ -11,6 +11,7 @@ export type EventType =
   | "question_requested"
   | "plan_proposed"
   | "tool_started"
+  | "tool_progress"
   | "tool_finished"
   | "iteration_end"
   | "turn_end"
@@ -36,6 +37,16 @@ export type ApprovalDecision = "once" | "deny" | "always_tool" | "always_command
 export interface TodoItem {
   content: string;
   status: "pending" | "in_progress" | "done";
+}
+
+// One live line from inside a still-running tool (backend `tool_progress`). Display-only
+// and never persisted, so replayed transcripts have none — a delegated coding task runs
+// for minutes and would otherwise look wedged. Strings arrive pre-truncated by the server.
+export interface ToolProgress {
+  kind: "narration" | "tool";
+  text?: string;
+  tool?: string;
+  target?: string;
 }
 
 export interface SessionInfo {
@@ -84,7 +95,8 @@ export type Item =
   // `hidden` = results the user's privacy filters removed before the agent saw them
   // (from the tool message's `_display` sidecar; the agent-visible content has no trace).
   // `standingRule` = the task-scoped rule that auto-allowed this call ("tool → target").
-  | { kind: "tool"; id: string; name: string; args: any; status: string; preview?: string; hidden?: number; standingRule?: string }
+  // `progress` = live lines streamed while the call is still running (long delegations).
+  | { kind: "tool"; id: string; name: string; args: any; status: string; preview?: string; hidden?: number; standingRule?: string; progress?: ToolProgress[] }
   | {
       kind: "approval";
       name: string;

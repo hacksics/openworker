@@ -28,7 +28,15 @@ import {
   type SurfaceVisibility,
   type WorkspaceCommandTrust,
 } from "./api";
-import type { ApprovalDecision, Attachment, Item, SessionInfo, TodoItem, WsEvent } from "./types";
+import type {
+  ApprovalDecision,
+  Attachment,
+  Item,
+  SessionInfo,
+  TodoItem,
+  ToolProgress,
+  WsEvent,
+} from "./types";
 import { isProjectScoped } from "./personaScope";
 import { baseName } from "./paths";
 import { itemsFromMessages } from "./itemsFromMessages";
@@ -661,6 +669,18 @@ export function App() {
               multi: !!d.multi,
             },
           ]);
+          break;
+        case "tool_progress":
+          // Live detail from inside a call that hasn't returned (a delegated coding task
+          // reporting what it's editing). Display-only — never added to the history.
+          setItems((p) =>
+            appendToolProgress(p, d.name, {
+              kind: d.kind === "narration" ? "narration" : "tool",
+              text: d.text,
+              tool: d.tool,
+              target: d.target,
+            }),
+          );
           break;
         case "tool_finished":
           setItems((p) =>
@@ -1656,6 +1676,27 @@ function WaitingForAgent() {
       </div>
     </div>
   );
+}
+
+// Cap the retained lines per call: a long delegation emits one per step, and the card only
+// ever shows the tail. Unbounded growth would bloat React state for no visible gain.
+const MAX_TOOL_PROGRESS = 50;
+
+// Append one live progress line to the still-running call it belongs to. Matches on name +
+// `status === "…"` like updateLastTool — the wire carries no tool-call id — which is safe
+// because progress-reporting tools are EXEC-classified and therefore never run in the
+// engine's parallel batch, so only one call of a given name is in flight at a time.
+function appendToolProgress(items: Item[], name: string, line: ToolProgress): Item[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i >= 0; i--) {
+    const it = copy[i];
+    if (it.kind === "tool" && it.name === name && it.status === "…") {
+      const progress = [...(it.progress ?? []), line].slice(-MAX_TOOL_PROGRESS);
+      copy[i] = { ...it, progress };
+      break;
+    }
+  }
+  return copy;
 }
 
 function updateLastTool(
