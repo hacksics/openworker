@@ -21,6 +21,7 @@ import aisuite as ai
 
 from .agents.base import AgentContext
 from .risk import RiskClass
+from .tools.claude_code import ClaudeCodeCLI, claude_code_tools
 from .tools.files import file_tools
 from .tools.git import git_tools
 from .tools.search import search_tools
@@ -66,6 +67,24 @@ def _code_files(context: AgentContext) -> list:
     return [*files, *file_tools(ws)]
 
 
+def _code_files_readonly(context: AgentContext) -> list:
+    """The read-only slice of `code_files` — the same one `explore` runs on (no
+    `allow_write`, so no write_file/replace_in_file/apply_patch).
+
+    Pairs with `claude_code`: a persona that delegates every edit then has exactly one
+    write path — the approval-gated delegation — instead of two, which makes "all changes
+    go through the delegate" an enforced property rather than a prompt instruction.
+    """
+    ws = str(context.workspace)
+    replaced = {"search_files", "read_file", "read_file_lines"}
+    files = [
+        t
+        for t in ai.toolkits.files(root=ws)  # no allow_write → list/read only
+        if getattr(t, "__name__", "") not in replaced
+    ]
+    return [*files, *file_tools(ws)]
+
+
 def _files(context: AgentContext) -> list:
     """Knowledge-work files: multi-root aware (reads/writes across the session's roots), keeps
     aisuite's `read_file`/`read_file_lines`. Only our `grep` replaces the slow `search_files`.
@@ -98,6 +117,17 @@ def _todo(context: AgentContext) -> list:
     return todo_tools(context.todo)  # todo_write (drives the Progress panel)
 
 
+def _claude_code(context: AgentContext) -> list:
+    """Delegate whole coding tasks to the Claude Code CLI (`delegate_coding_task`).
+
+    One `ClaudeCodeCLI` per engine, so its captured Claude Code `session_id` lives exactly
+    as long as the OpenWorker session and follow-up delegations resume rather than restart.
+    """
+    return claude_code_tools(
+        ClaudeCodeCLI(workspace=context.workspace, roots=context.roots)
+    )
+
+
 _CAPS: list[Capability] = [
     Capability(
         id="code_files",
@@ -106,6 +136,14 @@ _CAPS: list[Capability] = [
         build=_code_files,
         requires=("workspace",),
         risk=(RiskClass.READ, RiskClass.WRITE_LOCAL),
+    ),
+    Capability(
+        id="code_files_readonly",
+        name="Code files (read-only)",
+        description="Read files in a single repo workspace, without editing them.",
+        build=_code_files_readonly,
+        requires=("workspace",),
+        risk=(RiskClass.READ,),
     ),
     Capability(
         id="files",
@@ -146,6 +184,19 @@ _CAPS: list[Capability] = [
         build=_todo,
         requires=("todo",),
         risk=(RiskClass.READ,),
+    ),
+    Capability(
+        id="claude_code",
+        name="Claude Code",
+        description=(
+            "Delegate implementation tasks to the Claude Code CLI, which edits files "
+            "and runs commands in the workspace on your behalf."
+        ),
+        build=_claude_code,
+        requires=("workspace",),
+        # WRITE_LOCAL and EXEC both, because the delegate does both inside one approval —
+        # the consent screen must say so.
+        risk=(RiskClass.EXEC, RiskClass.WRITE_LOCAL),
     ),
 ]
 

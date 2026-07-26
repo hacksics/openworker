@@ -39,6 +39,13 @@ export function humanizeTool(name: string, args: any): HumanLine {
         ...(desc ? { post: ` — ${desc.charAt(0).toLowerCase()}${desc.slice(1)}` } : {}),
       };
     }
+    // The delegate's task is the model's own words (like run_shell's description), so it
+    // leads — "Delegated to Claude Code" alone says nothing about what was handed over.
+    case "delegate_coding_task":
+      return {
+        pre: "Delegated to Claude Code: ",
+        obj: trunc(String(a.task ?? "a coding task"), 70),
+      };
     case "shell_task_output":
       return { pre: "Checked on a background command" };
     case "shell_task_kill":
@@ -119,6 +126,14 @@ export function humanizeApprovalTitle(name: string, args: any): HumanLine {
         ...(desc ? { post: ` — ${desc.charAt(0).toLowerCase()}${desc.slice(1)}` } : {}),
       };
     }
+    // Approving this authorizes a whole agent run (it edits and runs commands under its own
+    // policy), so the headline names the delegate — the user is consenting to more than one
+    // edit. The task itself is the object being decided.
+    case "delegate_coding_task":
+      return {
+        pre: "Let Claude Code work on ",
+        obj: trunc(String(a.task ?? "a coding task"), 70),
+      };
     case "send_message": {
       const { tail } = messageTarget(String(a.target ?? ""));
       return tail ? { pre: "Send a message to ", obj: tail } : { pre: "Send a message" };
@@ -142,6 +157,11 @@ export function humanizeAsk(name: string, args: any): HumanLine {
   switch (name) {
     case "run_shell":
       return { pre: "Wanted to run ", obj: trunc(String(a.command ?? ""), 60) };
+    case "delegate_coding_task":
+      return {
+        pre: "Wanted Claude Code to work on ",
+        obj: trunc(String(a.task ?? "a coding task"), 70),
+      };
     case "write_file":
       return { pre: "Wanted to write ", obj: baseName(String(a.path ?? "a file")) };
     case "replace_in_file":

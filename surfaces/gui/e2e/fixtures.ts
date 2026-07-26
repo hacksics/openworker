@@ -564,6 +564,9 @@ export async function mockApi(page: import("@playwright/test").Page) {
   //     assistant_deltas → assistant_message "Echo: <text>" → turn_done
   //   · a message containing "run a tool": tool_proposed + permission_required, then the turn
   //     SUSPENDS until the client's approval decision arrives (deny → skipped; else → ran)
+  //   · a message containing "delegate": the same approval round-trip, then a run of timed
+  //     `tool_progress` events before tool_finished — the real ordering for an EXEC-gated
+  //     long call (approval first, progress only once it's actually running)
   // App-wide event stream: register the socket so sendAppEvent can push into it.
   await page.routeWebSocket(/\/ws\/events$/, (ws) => {
     eventSockets.set(page, ws);
@@ -575,6 +578,7 @@ export async function mockApi(page: import("@playwright/test").Page) {
     send("ready");
     let pendingTool = "run_shell"; // which proposal the next approval decision resolves
     let epicTimer: ReturnType<typeof setInterval> | null = null; // the slow stream, stoppable via interrupt
+    let progressTimer: ReturnType<typeof setInterval> | null = null; // a delegation's live progress
     let hadTurn = false; // a user_message landed — set_model is now a mid-session switch
     ws.onMessage((raw) => {
       const msg = JSON.parse(String(raw));
@@ -588,6 +592,19 @@ export async function mockApi(page: import("@playwright/test").Page) {
             name: "run_shell",
             arguments: { command: "ls" },
             reason: "The coworker wants to run a command.",
+          });
+          return; // suspended on the approval
+        }
+        // A delegated coding task: EXEC-classified, so it gates on approval first and only
+        // then streams progress while it runs (see the approval branch below).
+        if (/delegate/i.test(msg.text)) {
+          pendingTool = "delegate_coding_task";
+          const args = { task: "add a --verbose flag" };
+          send("tool_proposed", { name: pendingTool, arguments: args });
+          send("permission_required", {
+            name: pendingTool,
+            arguments: args,
+            reason: "The coworker wants to delegate this to Claude Code.",
           });
           return; // suspended on the approval
         }
@@ -715,6 +732,38 @@ export async function mockApi(page: import("@playwright/test").Page) {
             send("tool_finished", { name: "run_shell", status: "done", result_preview: "README.md" });
             send("assistant_message", { text: "The command ran; 1 file found." });
           }
+        } else if (pendingTool === "delegate_coding_task") {
+          if (msg.decision === "deny") {
+            send("tool_finished", { name: pendingTool, status: "denied" });
+            send("assistant_message", { text: "Understood — left the code alone." });
+            send("turn_done");
+            return;
+          }
+          // Approved → the delegate is now running. Report what it's doing on a timer, so
+          // the spec sees the live lines land one at a time before the call returns.
+          const lines: Record<string, unknown>[] = [
+            { kind: "narration", text: "Reading the CLI module." },
+            { kind: "tool", tool: "Read", target: "src/cli.py" },
+            { kind: "tool", tool: "Edit", target: "src/cli.py" },
+            { kind: "tool", tool: "Bash", target: "pytest -q" },
+          ];
+          let i = 0;
+          progressTimer = setInterval(() => {
+            if (i < lines.length) {
+              send("tool_progress", { name: pendingTool, ...lines[i++] });
+              return;
+            }
+            if (progressTimer) clearInterval(progressTimer);
+            progressTimer = null;
+            send("tool_finished", {
+              name: pendingTool,
+              status: "done",
+              result_preview: "Added --verbose. pytest passes.",
+            });
+            send("assistant_message", { text: "Claude Code added the flag and a test." });
+            send("turn_done");
+          }, 80);
+          return; // turn_done rides the timer, not this frame
         } else if (msg.decision === "deny") {
           send("tool_finished", { name: pendingTool, status: "denied" });
           send("assistant_message", { text: "Understood — skipped it." });
@@ -730,6 +779,10 @@ export async function mockApi(page: import("@playwright/test").Page) {
         if (epicTimer) {
           clearInterval(epicTimer);
           epicTimer = null;
+        }
+        if (progressTimer) {
+          clearInterval(progressTimer);
+          progressTimer = null;
         }
         send("interrupted", {});
         send("turn_done");

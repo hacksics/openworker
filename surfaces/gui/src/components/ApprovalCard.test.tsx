@@ -162,6 +162,28 @@ describe("ApprovalCard — §35 shapes", () => {
     expect(screen.getByText(/stays on this Mac/)).toBeTruthy();
     expect(screen.getByText("Always allow this command")).toBeTruthy();
   });
+
+  it("a delegated coding task names the delegate and offers NO blanket Always allow", () => {
+    render(
+      <ApprovalCard
+        item={sendApproval({
+          name: "delegate_coding_task",
+          args: { task: "add a --verbose flag to the CLI" },
+          category: undefined,
+        })}
+        onApprove={vi.fn()}
+      />,
+    );
+    // The headline says who is being handed the work — approving authorizes a whole run.
+    expect(screen.getByText(/Let Claude Code work on/)).toBeTruthy();
+    // Twice over: emphasized in the title, and again in the args line below it.
+    expect(screen.getAllByText(/add a --verbose flag to the CLI/).length).toBeGreaterThan(0);
+    // No session-wide grant: an unbounded agent loop has no narrower scope to pin, so it's
+    // decided per call — the same reason run_shell never offers a blanket grant.
+    expect(screen.queryByText("Always allow")).toBeNull();
+    expect(screen.getByText("Allow once")).toBeTruthy();
+    expect(screen.getByText("Deny")).toBeTruthy();
+  });
 });
 
 describe("InboxItemCard — Allow every time on parked run approvals", () => {

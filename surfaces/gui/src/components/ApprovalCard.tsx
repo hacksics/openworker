@@ -23,7 +23,15 @@ const TOOL_VERBS: Record<string, string> = {
   run_shell: "Run a command",
   send_message: "Send a message",
   send_file: "Send a file",
+  delegate_coding_task: "Delegate a coding task",
 };
+
+// Tools that offer NO blanket "Always allow": a session-wide grant would hand over
+// open-ended authority. run_shell substitutes a command-scoped grant below;
+// delegate_coding_task has no narrower scope to pin (its argument is a whole task, and the
+// delegate then edits and runs commands under its own policy), so every delegation is
+// decided on its own — consistent with never auto-approving a bare shell.
+const NO_BLANKET_GRANT = new Set(["run_shell", "delegate_coding_task"]);
 
 // §35: routine workspace writes render as a compact ROW; everything else is a full card.
 const FILE_WRITES = new Set(["write_file", "replace_in_file", "apply_patch", "apply_unified_diff"]);
@@ -152,7 +160,7 @@ function Buttons({
           exactly the scope distinction §25 exists to draw. Same rule for run_shell:
           the command-scoped button below is the specific (safer) grant, so the
           tool-wide one stays out of the card. */}
-      {!connector && !offerStanding && item.name !== "run_shell" && (
+      {!connector && !offerStanding && !NO_BLANKET_GRANT.has(item.name) && (
         <button
           className="btn"
           title={`Always allow ${TOOL_VERBS[item.name]?.toLowerCase() || item.name} for this session`}

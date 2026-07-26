@@ -25,10 +25,15 @@ class RiskClass(str, Enum):
 # Built-in tools whose risk is fixed by name (the old WRITE_TOOLS / SHELL_TOOL, as data).
 WRITE_TOOLS = {"write_file", "replace_in_file", "apply_patch", "apply_unified_diff"}
 SHELL_TOOL = "run_shell"
+# Delegating to an external coding agent both writes and runs commands, so it is EXEC:
+# blocked outright in the read-only modes, approval-gated in interactive. The approval is
+# necessarily coarse — the child process runs under its own policy (see tools/claude_code).
+DELEGATE_TOOL = "delegate_coding_task"
 
 _BASE: dict[str, RiskClass] = {
     **{name: RiskClass.WRITE_LOCAL for name in WRITE_TOOLS},
     SHELL_TOOL: RiskClass.EXEC,
+    DELEGATE_TOOL: RiskClass.EXEC,
 }
 
 # A user-local override resolver: tool name -> RiskClass (or None to defer to the base).
